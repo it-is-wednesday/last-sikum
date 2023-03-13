@@ -1,0 +1,15 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "lastfm_collage_generator"
+authors = [{name = "Ma'or Kadosh", email = "git@avocadosh.xyz"}]
+dynamic = ["version", "description"]
+dependencies = ["pylast==4.5.0", "Pillow==9.0.1", "python-dotenv==0.19.2"]
+
+[project.scripts]
+lastfm-collage-generator = "lastfm_collage_generator:main"
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "f", "x", "y", "ex", "Run", "_"]
