@@ -9,6 +9,7 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from itertools import product
+from pathlib import Path
 from string import ascii_lowercase
 from typing import Iterable, Iterator
 from urllib.request import urlopen
@@ -19,9 +20,20 @@ from PIL import Image, ImageDraw, ImageFont
 
 __version__ = "3.22"
 
-IMAGE_EDGE_SIZE = 300
 TEXT_BG_BOTTOM_PADDING = 5
 FONT_SIZE = 15
+# in px
+IMAGE_EDGE_SIZE = 300
+# despite only needing 9 albums for the collage, we'll fetch a bit more so we
+# can discard albums with no album art and just draw the next album instead
+ACTUAL_FETCH_COUNT = 15
+
+
+@dataclass
+class LastfmCredentials:
+    "Credentials for uhh last.fm"
+    api_key: str
+    api_secret: str
 
 
 @dataclass
@@ -32,20 +44,27 @@ class Album:
     cover_art: Image.Image
 
 
-def fetch_albums() -> Iterator[Album]:
-    """
-    Fetch my 9 most listened albums from the past month
-    Expects LASTFM_API_KEY and LASTFM_API_SECRET env vars
+def getenv(varname: str) -> str:
+    """Return the environment variable's value or exit script if it's not set"""
+    value = os.getenv(varname)
+    if value is None:
+        print(
+            f"You need to set environment variable {varname}. Feel free to shove it in a .env file",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
 
-    This is the module's interface with the outer world; the rest of it is free of side effects
+
+def fetch_albums(creds: LastfmCredentials) -> Iterator[Album]:
     """
-    api_key = os.getenv("LASTFM_API_KEY")
-    api_secret = os.getenv("LASTFM_API_SECRET")
-    assert api_key is not None
-    assert api_secret is not None
-    network = pylast.LastFMNetwork(api_key, api_secret)
-    # despite only needing 9 albums for the collage, we'll fetch a bit more so we can discard
-    # albums with no album art and just draw the next album instead
+    Fetch top ACTUAL_FETCH_COUNT albums listened to by the account associated
+    with these credentials
+
+    This is the module's interface with the outer world; the rest of it is free
+    of side effects
+    """
+    network = pylast.LastFMNetwork(creds.api_key, creds.api_secret)
     items = network.get_user("jpegaga").get_top_albums(pylast.PERIOD_1MONTH, limit=15)
 
     # yield all items with a non-None album art
@@ -68,25 +87,24 @@ def fetch_albums() -> Iterator[Album]:
             )
 
 
-def overlay(text: str) -> Image.Image:
+def overlay(text: str, font_path: Path) -> Image.Image:
     """
     An image of some text in a cool font on top of a black rectangle stretching across the whole
     image horizontally
-    Font location should be defined via COLLAGE_TTF env var
     """
-    fnt = ImageFont.truetype(os.getenv("COLLAGE_TTF"), FONT_SIZE)
-    height = fnt.getsize_multiline(text)[1] + TEXT_BG_BOTTOM_PADDING
+    font = ImageFont.truetype(str(font_path), FONT_SIZE)
+    height = font.getsize_multiline(text)[1] + TEXT_BG_BOTTOM_PADDING
 
     rect = Image.new("RGBA", (IMAGE_EDGE_SIZE, IMAGE_EDGE_SIZE), (255, 255, 255, 0))
 
     draw = ImageDraw.Draw(rect)
     draw.rectangle((0, 0, IMAGE_EDGE_SIZE, height), fill=(0, 0, 0, 180))
-    draw.text((0, 0), text, font=fnt)
+    draw.text((0, 0), text, font=font)
 
     return rect
 
 
-def generate_collage(albums: Iterable[Album], print_progress=True):
+def generate_collage(albums: Iterable[Album], font: Path, print_progress=True) -> Image:
     "Return an RGB Pillow.Image consisting of these albums"
     result_img = Image.new("RGBA", (3 * IMAGE_EDGE_SIZE, 3 * IMAGE_EDGE_SIZE))
     # pylint: disable=unspecified-encoding,consider-using-with
@@ -101,7 +119,7 @@ def generate_collage(albums: Iterable[Album], print_progress=True):
 
         base_cover = album.cover_art
         label = f"{album.title}\n{album.artist}"
-        img = Image.alpha_composite(base_cover, overlay(label))
+        img = Image.alpha_composite(base_cover, overlay(label, font))
 
         result_img.paste(img, (x * IMAGE_EDGE_SIZE, y * IMAGE_EDGE_SIZE))
 
@@ -118,21 +136,30 @@ def generate_test_collage():
         letters = random.choices(ascii_lowercase + " ", k=random.randint(5, 50))
         return "".join(letters).strip()
 
-    art = Image.open("content/static/me.webp").convert("RGBA")
+    art = Image.open("me.webp").convert("RGBA")
 
     albums = [
         Album(title=random_string(), artist=random_string(), cover_art=art)
         for _ in range(9)
     ]
 
-    return generate_collage(albums, print_progress=False)
+    font_path = "/usr/share/fonts/TTF/DejaVuSans.ttf"
+    return generate_collage(albums, font_path, print_progress=False)
 
 
 def main():
-    "CLI entry point"
+    "Entry point"
+
     parser = ArgumentParser()
     parser.add_argument("target_path", help="Path for saved collage WEBP image")
-    path = parser.parse_args().target_path
+    parser.add_argument("font_path", type=Path)
+    args = parser.parse_args()
 
     load_dotenv()
-    generate_collage(fetch_albums()).save(path, quality=40)
+    creds = LastfmCredentials(getenv("LASTFM_API_KEY"), getenv("LASTFM_API_SECRET"))
+    img = generate_collage(fetch_albums(creds), args.font_path)
+    img.save(args.target_path, quality=40)
+
+
+if __name__ == "__main__":
+    main()
